@@ -39,11 +39,9 @@ func configureExternalDatabase(ctx context.Context, kineEndpoint string, vConfig
 			return "", nil, fmt.Errorf("provision database from connector: %w", err)
 		}
 		
-		// Use the provisioned dataSource if original was empty
-		if dataSource == "" {
-			dataSource = provisionedDataSource
-			klog.Infof("Using provisioned database connection")
-		}
+		// Use the provisioned dataSource (connector always takes precedence)
+		dataSource = provisionedDataSource
+		klog.Infof("Using provisioned database connection")
 	}
 
 	// Validate dataSource is not empty
