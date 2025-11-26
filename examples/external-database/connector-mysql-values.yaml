@@ -23,9 +23,8 @@ controlPlane:
         # Reference to the connector secret
         connector: "mysql-connector"
         
-        # dataSource is optional when using connector
-        # It will be automatically generated
-        # dataSource: ""
+        # dataSource is required but will be automatically replaced by connector
+        dataSource: "placeholder"
         
         # Optional: Extra Kine arguments
         # extraArgs:

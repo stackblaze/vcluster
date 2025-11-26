@@ -40,7 +40,7 @@ func AddCommonFlags(cmd *cobra.Command, options *cli.CreateOptions) {
 	cmd.Flags().StringVar(&options.KubeConfigContextName, "kube-config-context-name", "", "If set, will override the context name of the generated virtual cluster kube config with this name")
 	cmd.Flags().StringVar(&options.ChartVersion, "chart-version", upgrade.GetVersion(), "The virtual cluster chart version to use (e.g. v0.9.1)")
 	cmd.Flags().StringVar(&options.ChartName, "chart-name", "vcluster", "The virtual cluster chart name to use")
-	cmd.Flags().StringVar(&options.ChartRepo, "chart-repo", constants.LoftChartRepo, "The virtual cluster chart repo to use")
+	cmd.Flags().StringVar(&options.ChartRepo, "chart-repo", "", "The virtual cluster chart repo to use (empty = use embedded chart)")
 	cmd.Flags().StringArrayVarP(&options.Values, "values", "f", []string{}, "Path where to load extra helm values from")
 	cmd.Flags().StringArrayVar(&options.SetValues, "set", []string{}, "Set values for helm. E.g. --set 'persistence.enabled=true'")
 	cmd.Flags().BoolVar(&options.Print, "print", false, "If enabled, prints the context to the console")
