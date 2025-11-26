@@ -1,0 +1,30 @@
+# Example vCluster configuration with external PostgreSQL database
+#
+# Prerequisites:
+# 1. PostgreSQL server running and accessible
+# 2. Database and user created (see postgres-setup.sql)
+#
+# Usage:
+#   vcluster create my-vcluster -f postgres-values.yaml
+
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        # Replace with your PostgreSQL connection details
+        dataSource: "postgres://vcluster_user:your_password@postgres-server.default.svc.cluster.local:5432/vcluster_db?sslmode=disable"
+        
+        # Optional: TLS configuration
+        # For SSL mode, change sslmode in dataSource and provide certificates:
+        # dataSource: "postgres://vcluster_user:your_password@postgres-server:5432/vcluster_db?sslmode=require"
+        # caFile: "/certs/ca.pem"
+        # certFile: "/certs/client-cert.pem"
+        # keyFile: "/certs/client-key.pem"
+        
+        # Optional: Extra Kine arguments
+        # extraArgs:
+        #   - "--metrics-bind-address=:8080"
+
+
+

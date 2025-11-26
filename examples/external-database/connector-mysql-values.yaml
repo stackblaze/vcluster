@@ -1,0 +1,35 @@
+# Example vCluster configuration using MySQL connector for auto-provisioning
+#
+# Prerequisites:
+# 1. MySQL server running and accessible
+# 2. Connector secret created (see connector-mysql-secret.yaml)
+#
+# Usage:
+#   kubectl apply -f connector-mysql-secret.yaml
+#   vcluster create my-vcluster -f connector-mysql-values.yaml
+#
+# What happens:
+# 1. vCluster reads the connector secret
+# 2. Automatically creates a new database (e.g., vcluster_my_vcluster_abc123)
+# 3. Automatically creates a new user with access only to that database
+# 4. Saves the credentials to a secret (vc-db-my-vcluster)
+# 5. Starts Kine with the new database
+
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        # Reference to the connector secret
+        connector: "mysql-connector"
+        
+        # dataSource is optional when using connector
+        # It will be automatically generated
+        # dataSource: ""
+        
+        # Optional: Extra Kine arguments
+        # extraArgs:
+        #   - "--metrics-bind-address=:8080"
+
+
+

@@ -4,8 +4,9 @@ WORKDIR /vcluster-dev
 ARG TARGETOS
 ARG TARGETARCH
 
-# Install helm binary
-RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 && chmod 700 get_helm.sh && ./get_helm.sh
+# Install helm binary - copy pre-downloaded one
+COPY helm-binary /usr/local/bin/helm
+RUN chmod +x /usr/local/bin/helm
 
 # Copy the Go Modules manifests
 COPY go.mod go.mod
@@ -16,6 +17,7 @@ COPY vendor/ vendor/
 COPY cmd/vclusterctl cmd/vclusterctl
 COPY pkg/ pkg/
 COPY cmd/ cmd/
+COPY config/ config/
 
 # Copy and embed the helm charts
 COPY chart/ chart/

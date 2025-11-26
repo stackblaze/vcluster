@@ -302,9 +302,9 @@ func StartBackingStore(ctx context.Context, vConfig *config.VirtualClusterConfig
 			return "", nil, fmt.Errorf("external datasource cannot be empty if external database is enabled")
 		}
 
-		// call out to the pro code
+		// call out to the etcd code for external database configuration
 		var err error
-		etcdEndpoints, etcdCertificates, err = pro.ConfigureExternalDatabase(ctx, constants.K8sKineEndpoint, vConfig, true)
+		etcdEndpoints, etcdCertificates, err = etcd.ConfigureExternalDatabase(ctx, constants.K8sKineEndpoint, vConfig, true)
 		if err != nil {
 			return "", nil, fmt.Errorf("configure external database: %w", err)
 		}
