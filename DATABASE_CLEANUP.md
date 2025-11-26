@@ -7,23 +7,32 @@ When using the external database connector, each vCluster automatically provisio
 - A dedicated user with minimal privileges
 - A credentials secret for backup/recovery
 
-**By default, these resources are NOT deleted** when you delete the vCluster. This is intentional for data safety and backup purposes.
+**By default, these resources ARE automatically deleted** when you delete a vCluster that was created with a connector. This ensures no orphaned databases are left behind.
 
-## Why Keep Databases by Default?
+## Automatic Cleanup
 
-1. **Data Safety**: Prevents accidental data loss
-2. **Backup/Recovery**: Allows restoring a vCluster from existing data
-3. **Audit Trail**: Keeps historical data for compliance
-4. **Manual Review**: Allows inspection before permanent deletion
-
-## How to Clean Up Databases
-
-### Option 1: Delete with Cleanup Flag
-
-Use the `--delete-database` flag to automatically clean up the database when deleting a vCluster:
+When you delete a vCluster that was created with a connector, the database is automatically cleaned up:
 
 ```bash
-vcluster delete my-vcluster --namespace team-x --delete-database
+vcluster delete my-vcluster --namespace team-x
+# Database is automatically deleted!
+```
+
+This will:
+1. Delete the vCluster (helm release, pods, etc.)
+2. Terminate any active database connections
+3. Drop the database (e.g., `vcluster_my_vcluster_abc123`)
+4. Drop the database user (e.g., `vcluster_my_vcluster`)
+5. Delete the credentials secret (e.g., `vc-db-my-vcluster`)
+
+## How to Keep Databases
+
+### Option 1: Use Keep Database Flag
+
+If you want to preserve the database for backup/recovery, use the `--keep-database` flag:
+
+```bash
+vcluster delete my-vcluster --namespace team-x --keep-database
 ```
 
 This will:
@@ -35,7 +44,7 @@ This will:
 
 ### Option 2: Manual Cleanup
 
-If you deleted a vCluster without the `--delete-database` flag, you can manually clean up:
+If you used `--keep-database` and want to clean up later, you can manually clean up:
 
 #### PostgreSQL
 
@@ -121,31 +130,32 @@ When using `--delete-database`, the following are removed:
 
 ## Examples
 
-### Delete with Cleanup
+### Delete with Automatic Cleanup (Default)
 
 ```bash
-# Delete vCluster and its database
-vcluster delete my-vcluster --namespace team-x --delete-database
+# Delete vCluster and its database (automatic)
+vcluster delete my-vcluster --namespace team-x
 
 # Output:
 # Delete vcluster my-vcluster...
 # Successfully deleted virtual cluster my-vcluster in namespace team-x
-# Cleaning up external database...
+# Cleaning up external database (auto-provisioned by connector)...
 # Dropping database 'vcluster_my_vcluster_8457a92d' and user 'vcluster_my_vcluster'
 # Successfully cleaned up database 'vcluster_my_vcluster_8457a92d' and user 'vcluster_my_vcluster'
 # Deleted credentials secret 'vc-db-my-vcluster'
 # Successfully cleaned up external database
 ```
 
-### Delete without Cleanup (Default)
+### Delete without Cleanup (Keep Database)
 
 ```bash
 # Delete vCluster, keep database for backup
-vcluster delete my-vcluster --namespace team-x
+vcluster delete my-vcluster --namespace team-x --keep-database
 
 # Output:
 # Delete vcluster my-vcluster...
 # Successfully deleted virtual cluster my-vcluster in namespace team-x
+# Keeping external database (--keep-database flag set)
 # (Database vcluster_my_vcluster_8457a92d is preserved)
 ```
 
@@ -163,14 +173,15 @@ vcluster create my-vcluster --namespace team-x \
 
 ### Development/Testing
 ```bash
-# Always cleanup in dev/test environments
-vcluster delete test-cluster --namespace dev --delete-database
+# Default behavior: automatic cleanup
+vcluster delete test-cluster --namespace dev
+# Database is automatically cleaned up
 ```
 
 ### Production
 ```bash
 # Keep databases for backup in production
-vcluster delete prod-cluster --namespace production
+vcluster delete prod-cluster --namespace production --keep-database
 
 # Manual cleanup after verification
 # (after backing up if needed)
@@ -181,10 +192,12 @@ kubectl exec -n db deploy/postgres -- psql -U postgres -c "DROP DATABASE vcluste
 ```bash
 # Add to CI/CD pipeline
 if [ "$ENVIRONMENT" = "dev" ]; then
-  vcluster delete $CLUSTER_NAME --namespace $NAMESPACE --delete-database
-else
+  # Default: automatic cleanup
   vcluster delete $CLUSTER_NAME --namespace $NAMESPACE
-  # Manual approval required for database cleanup
+else
+  # Production: keep database for backup
+  vcluster delete $CLUSTER_NAME --namespace $NAMESPACE --keep-database
+  # Manual cleanup after backup/verification
 fi
 ```
 

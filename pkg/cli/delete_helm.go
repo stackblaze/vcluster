@@ -43,7 +43,7 @@ type DeleteOptions struct {
 	DeleteConfigMap     bool
 	AutoDeleteNamespace bool
 	IgnoreNotFound      bool
-	DeleteDatabase      bool
+	KeepDatabase        bool
 }
 
 type deleteHelm struct {
@@ -145,9 +145,9 @@ func DeleteHelm(ctx context.Context, platformClient platform.Client, options *De
 	}
 	cmd.log.Donef("Successfully deleted virtual cluster %s in namespace %s", vClusterName, cmd.Namespace)
 
-	// delete external database if requested
-	if cmd.DeleteDatabase {
-		cmd.log.Infof("Cleaning up external database...")
+	// automatically cleanup external database if connector was used (unless --keep-database is set)
+	if !cmd.KeepDatabase && vclusterConfig.ControlPlane.BackingStore.Database.External.Connector != "" {
+		cmd.log.Infof("Cleaning up external database (auto-provisioned by connector)...")
 		vConfig := &pkgconfig.VirtualClusterConfig{
 			Name:          vClusterName,
 			HostNamespace: cmd.Namespace,
@@ -175,6 +175,8 @@ func DeleteHelm(ctx context.Context, platformClient platform.Client, options *De
 		} else {
 			cmd.log.Donef("Successfully cleaned up external database")
 		}
+	} else if cmd.KeepDatabase && vclusterConfig.ControlPlane.BackingStore.Database.External.Connector != "" {
+		cmd.log.Infof("Keeping external database (--keep-database flag set)")
 	}
 
 	// delete priorityclasses
