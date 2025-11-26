@@ -1,5 +1,5 @@
 #!/bin/bash
-# vCluster with External Database Connector - One-line Installer
+# vCluster with External Database Connector - One-liner Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/stackblaze/vcluster/main/install.sh | bash
 
 set -e
@@ -10,11 +10,12 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${GREEN}=========================================="
-echo "vCluster Installer (with DB Connector)"
+echo "vCluster CLI Installer"
+echo "with External Database Connector Support"
 echo -e "==========================================${NC}"
 echo ""
 
-# Detect OS and Architecture
+# Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
@@ -31,93 +32,84 @@ case $ARCH in
         ;;
 esac
 
-case $OS in
-    linux)
-        PLATFORM="linux"
-        ;;
-    darwin)
-        PLATFORM="darwin"
-        ;;
-    *)
-        echo -e "${RED}Unsupported OS: $OS${NC}"
-        exit 1
-        ;;
-esac
+echo -e "${YELLOW}Detected: $OS/$ARCH${NC}"
 
-BINARY_NAME="vcluster-${PLATFORM}-${ARCH}"
+# Download URL
 GITHUB_REPO="stackblaze/vcluster"
-INSTALL_DIR="/usr/local/bin"
-BINARY_PATH="${INSTALL_DIR}/vcluster"
+RELEASE_TAG="latest"
+BINARY_NAME="vcluster"
 
-echo -e "${YELLOW}Detected platform: ${PLATFORM}-${ARCH}${NC}"
-echo ""
-
-# Get latest release
-echo "Fetching latest release..."
-LATEST_RELEASE=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-if [ -z "$LATEST_RELEASE" ]; then
-    echo -e "${YELLOW}No release found, using main branch${NC}"
-    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/raw/main/release/${BINARY_NAME}"
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then
+    INSTALL_DIR="/usr/local/bin"
+    SUDO=""
 else
-    echo -e "${GREEN}Latest release: ${LATEST_RELEASE}${NC}"
-    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
+    INSTALL_DIR="$HOME/.local/bin"
+    SUDO="sudo"
+    mkdir -p "$INSTALL_DIR"
 fi
 
-echo ""
-echo "Downloading vCluster CLI..."
-echo "URL: ${DOWNLOAD_URL}"
+echo -e "${YELLOW}Installing to: $INSTALL_DIR${NC}"
 
-# Download to temp file
-TMP_FILE=$(mktemp)
-if ! curl -fsSL "${DOWNLOAD_URL}" -o "${TMP_FILE}"; then
-    echo -e "${RED}Failed to download binary${NC}"
-    rm -f "${TMP_FILE}"
+# Create temporary directory
+TMP_DIR=$(mktemp -d)
+cd "$TMP_DIR"
+
+echo -e "${YELLOW}Downloading vCluster CLI...${NC}"
+
+# Download the CLI binary from GitHub releases
+# Note: You'll need to create a GitHub release with the binary
+if command -v curl &> /dev/null; then
+    curl -fsSL -o "$BINARY_NAME" "https://github.com/$GITHUB_REPO/releases/download/$RELEASE_TAG/$BINARY_NAME-$OS-$ARCH"
+elif command -v wget &> /dev/null; then
+    wget -q -O "$BINARY_NAME" "https://github.com/$GITHUB_REPO/releases/download/$RELEASE_TAG/$BINARY_NAME-$OS-$ARCH"
+else
+    echo -e "${RED}Error: curl or wget is required${NC}"
     exit 1
 fi
 
-# Make executable
-chmod +x "${TMP_FILE}"
+# Make it executable
+chmod +x "$BINARY_NAME"
 
-# Check if we need sudo
-if [ -w "${INSTALL_DIR}" ]; then
-    mv "${TMP_FILE}" "${BINARY_PATH}"
+# Install
+echo -e "${YELLOW}Installing vCluster CLI...${NC}"
+if [ "$EUID" -eq 0 ] || [ -w "$INSTALL_DIR" ]; then
+    mv "$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
 else
-    echo -e "${YELLOW}Installing to ${INSTALL_DIR} requires sudo${NC}"
-    sudo mv "${TMP_FILE}" "${BINARY_PATH}"
+    $SUDO mv "$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
 fi
 
-echo ""
-echo -e "${GREEN}✓ vCluster CLI installed successfully!${NC}"
-echo ""
+# Cleanup
+cd -
+rm -rf "$TMP_DIR"
 
 # Verify installation
 if command -v vcluster &> /dev/null; then
-    VERSION=$(vcluster --version 2>&1 || echo "unknown")
-    echo -e "${GREEN}Installed version: ${VERSION}${NC}"
+    echo ""
+    echo -e "${GREEN}✓ vCluster CLI installed successfully!${NC}"
+    echo ""
+    vcluster --version
+    echo ""
+    echo -e "${GREEN}=========================================="
+    echo "Quick Start"
+    echo -e "==========================================${NC}"
+    echo ""
+    echo "1. Create a vCluster:"
+    echo "   vcluster create my-vcluster --namespace team-x"
+    echo ""
+    echo "2. With external database (PostgreSQL/MySQL):"
+    echo "   vcluster create my-vcluster --namespace team-x \\"
+    echo "     --values https://raw.githubusercontent.com/$GITHUB_REPO/main/examples/external-database/connector-postgres-values.yaml"
+    echo ""
+    echo "3. Connect to your vCluster:"
+    echo "   vcluster connect my-vcluster --namespace team-x"
+    echo ""
+    echo -e "${YELLOW}Documentation: https://github.com/$GITHUB_REPO${NC}"
+    echo ""
 else
-    echo -e "${YELLOW}Warning: vcluster command not found in PATH${NC}"
-    echo "You may need to add ${INSTALL_DIR} to your PATH"
+    echo -e "${RED}✗ Installation failed${NC}"
+    echo "Please add $INSTALL_DIR to your PATH:"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    exit 1
 fi
-
-echo ""
-echo -e "${GREEN}=========================================="
-echo "Installation Complete!"
-echo -e "==========================================${NC}"
-echo ""
-echo "Features included:"
-echo "  ✓ External database connector (PostgreSQL/MySQL)"
-echo "  ✓ Automatic database provisioning"
-echo "  ✓ Embedded chart with connector support"
-echo ""
-echo "Quick start:"
-echo ""
-echo "  # Create a vCluster with external database"
-echo "  vcluster create my-vcluster \\"
-echo "    --namespace vcluster \\"
-echo "    --values connector-values.yaml"
-echo ""
-echo "Documentation:"
-echo "  https://github.com/${GITHUB_REPO}"
-echo ""
 
