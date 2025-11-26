@@ -1249,3 +1249,26 @@ telemetry:
 logging:
   # Encoding specifies the format of vCluster logs, it can either be json or console.
   encoding: console
+
+# SleepMode holds configuration for native/workload only sleep mode
+sleepMode:
+  # Enabled toggles the sleep mode functionality, allowing for disabling sleep mode without removing other config
+  enabled: false
+  # TimeZone represents the timezone a sleep schedule should run against, defaulting to UTC if unset
+  timeZone: ""
+  # AutoSleep holds autoSleep details
+  autoSleep:
+    # AfterInactivity represents how long a vCluster can be idle before workloads are automatically put to sleep
+    # Examples: "1h", "30m", "24h"
+    afterInactivity: ""
+    # Schedule represents a cron schedule for when to sleep workloads
+    # Example: "0 22 * * *" (sleep at 10 PM daily)
+    schedule: ""
+    # Exclude holds configuration for labels that, if present, will prevent a workload from going to sleep
+    exclude:
+      selector: {}
+  # AutoWakeup holds configuration for waking the vCluster on a schedule rather than waiting for some activity.
+  autoWakeup:
+    # Schedule represents a cron schedule for when to wake workloads automatically
+    # Example: "0 8 * * 1-5" (wake at 8 AM on weekdays)
+    schedule: ""

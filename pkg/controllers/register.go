@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/loft-sh/log"
 	vclusterconfig "github.com/loft-sh/vcluster/config"
 	"github.com/loft-sh/vcluster/pkg/controllers/servicesync"
 	"github.com/loft-sh/vcluster/pkg/syncer"
@@ -21,6 +22,7 @@ import (
 	"github.com/loft-sh/vcluster/pkg/controllers/coredns"
 	"github.com/loft-sh/vcluster/pkg/controllers/k8sdefaultendpoint"
 	"github.com/loft-sh/vcluster/pkg/controllers/podsecurity"
+	"github.com/loft-sh/vcluster/pkg/controllers/sleepmode"
 	"github.com/loft-sh/vcluster/pkg/snapshot"
 	csiVolumeSnapshots "github.com/loft-sh/vcluster/pkg/snapshot/volumes/csi/deploy"
 	"github.com/loft-sh/vcluster/pkg/util/loghelper"
@@ -43,6 +45,16 @@ func RegisterControllers(ctx *synccontext.ControllerContext, syncers []syncertyp
 		if err != nil {
 			return err
 		}
+	}
+
+	// register sleep mode controller and activity tracking
+	if ctx.Config.SleepMode != nil && ctx.Config.SleepMode.Enabled {
+		err := registerSleepModeController(ctx)
+		if err != nil {
+			return err
+		}
+		// Add activity tracking hook
+		ctx.PostServerHooks = append(ctx.PostServerHooks, sleepmode.WithActivityTracking)
 	}
 
 	if !ctx.Config.ControlPlane.Standalone.Enabled {
@@ -258,6 +270,22 @@ func registerPodSecurityController(ctx *synccontext.ControllerContext) error {
 	err := controller.SetupWithManager(ctx.VirtualManager)
 	if err != nil {
 		return fmt.Errorf("unable to setup pod security controller: %w", err)
+	}
+	return nil
+}
+
+func registerSleepModeController(ctx *synccontext.ControllerContext) error {
+	logger := loghelper.New("sleepmode-controller")
+	controller := &sleepmode.SleepModeReconciler{
+		Client:     ctx.HostManager.GetClient(),
+		KubeClient: ctx.Config.HostClient,
+		Config:     ctx.Config,
+		Log:        logger,
+		Logger:     log.GetInstance(),
+	}
+	err := controller.SetupWithManager(ctx.HostManager)
+	if err != nil {
+		return fmt.Errorf("unable to setup sleep mode controller: %w", err)
 	}
 	return nil
 }
