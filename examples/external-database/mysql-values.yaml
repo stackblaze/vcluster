@@ -1,0 +1,28 @@
+# Example vCluster configuration with external MySQL database
+#
+# Prerequisites:
+# 1. MySQL server running and accessible
+# 2. Database and user created (see mysql-setup.sql)
+#
+# Usage:
+#   vcluster create my-vcluster -f mysql-values.yaml
+
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        # Replace with your MySQL connection details
+        dataSource: "mysql://vcluster_user:your_password@tcp(mysql-server.default.svc.cluster.local:3306)/vcluster_db"
+        
+        # Optional: TLS configuration
+        # caFile: "/certs/ca.pem"
+        # certFile: "/certs/client-cert.pem"
+        # keyFile: "/certs/client-key.pem"
+        
+        # Optional: Extra Kine arguments
+        # extraArgs:
+        #   - "--metrics-bind-address=:8080"
+
+
+

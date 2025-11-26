@@ -106,8 +106,8 @@ func startExternalDatabaseBackingStore(ctx context.Context, vConfig *config.Virt
 		}
 	}
 
-	// call out to the pro code
-	_, _, err := pro.ConfigureExternalDatabase(ctx, kineAddress, vConfig, false)
+	// call out to the etcd code for external database configuration
+	_, _, err := etcd.ConfigureExternalDatabase(ctx, kineAddress, vConfig, false)
 	if err != nil {
 		return err
 	}

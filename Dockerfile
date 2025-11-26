@@ -1,21 +1,22 @@
 ARG KINE_VERSION="v0.14.4"
-FROM rancher/kine:${KINE_VERSION} AS kine
+FROM docker.io/rancher/kine:${KINE_VERSION} AS kine
 
 # Build program
-FROM golang:1.25 AS builder
+FROM docker.io/library/golang:1.25 AS builder
 
 WORKDIR /vcluster-dev
 ARG TARGETOS
 ARG TARGETARCH
 ARG BUILD_VERSION=dev
 ARG TELEMETRY_PRIVATE_KEY=""
-ARG HELM_VERSION="v3.17.3"
+ARG HELM_VERSION="v3.16.3"
 
 # Install kubectl for development
-RUN curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl
+RUN curl --retry 3 --retry-delay 2 -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl
 
-# Install helm binary
-RUN curl -s https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz > helm3.tar.gz && tar -zxvf helm3.tar.gz linux-${TARGETARCH}/helm && chmod +x linux-${TARGETARCH}/helm && mv linux-${TARGETARCH}/helm /usr/local/bin/helm && rm helm3.tar.gz && rm -R linux-${TARGETARCH}
+# Copy pre-downloaded helm binary from build context (workaround for network issues)
+COPY helm-binary /usr/local/bin/helm
+RUN chmod +x /usr/local/bin/helm
 
 # Install Delve for debugging
 RUN if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then go install github.com/go-delve/delve/cmd/dlv@latest; fi
@@ -57,7 +58,7 @@ RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
 ENTRYPOINT ["go", "run", "-mod", "vendor", "cmd/vcluster/main.go", "start"]
 
 # we use alpine for easier debugging
-FROM alpine:3.22
+FROM docker.io/library/alpine:3.22
 
 # install runtime dependencies
 RUN apk add --no-cache ca-certificates zstd tzdata

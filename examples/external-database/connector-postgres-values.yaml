@@ -1,0 +1,34 @@
+# Example vCluster configuration using PostgreSQL connector for auto-provisioning
+#
+# Prerequisites:
+# 1. PostgreSQL server running and accessible
+# 2. Connector secret created (see connector-postgres-secret.yaml)
+#
+# Usage:
+#   kubectl apply -f connector-postgres-secret.yaml
+#   vcluster create my-vcluster -f connector-postgres-values.yaml
+#
+# What happens:
+# 1. vCluster reads the connector secret
+# 2. Automatically creates a new database (e.g., vcluster_my_vcluster_abc123)
+# 3. Automatically creates a new user with access only to that database
+# 4. Saves the credentials to a secret (vc-db-my-vcluster)
+# 5. Starts Kine with the new database
+
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        # Reference to the connector secret
+        connector: "postgres-connector"
+        
+        # dataSource is required but will be automatically replaced by connector
+        dataSource: "placeholder"
+        
+        # Optional: Extra Kine arguments
+        # extraArgs:
+        #   - "--metrics-bind-address=:8080"
+
+
+

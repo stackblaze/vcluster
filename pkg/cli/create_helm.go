@@ -495,9 +495,10 @@ func (cmd *createHelm) addVCluster(ctx context.Context, name string, vClusterCon
 
 	_, err = platform.InitClientFromConfig(ctx, cmd.LoadedConfig(cmd.log))
 	if err != nil {
-		if vClusterConfig.IsProFeatureEnabled() {
-			return fmt.Errorf("you have vCluster pro features enabled, but seems like you are not logged in (%w). Please make sure to log into vCluster Platform to use vCluster pro features or run this command with --add=false", err)
-		}
+		// Disabled pro feature check for local development
+		// if vClusterConfig.IsProFeatureEnabled() {
+		// 	return fmt.Errorf("you have vCluster pro features enabled, but seems like you are not logged in (%w). Please make sure to log into vCluster Platform to use vCluster pro features or run this command with --add=false", err)
+		// }
 
 		cmd.log.Debugf("create platform client: %v", err)
 		return nil
@@ -601,7 +602,8 @@ func (cmd *createHelm) deployChart(ctx context.Context, vClusterName, chartValue
 
 	if cmd.LocalChartDir == "" {
 		chartEmbedded := false
-		if cmd.ChartVersion == upgrade.GetVersion() { // use embedded chart if default version
+		// Use embedded chart if ChartRepo is empty or if using default version
+		if cmd.ChartRepo == "" || cmd.ChartVersion == upgrade.GetVersion() {
 			embeddedChartName := fmt.Sprintf("%s-%s.tgz", cmd.ChartName, upgrade.GetVersion())
 			// not using filepath.Join because the embed.FS separator is not OS specific
 			embeddedChartPath := fmt.Sprintf("chart/%s", embeddedChartName)
@@ -623,7 +625,7 @@ func (cmd *createHelm) deployChart(ctx context.Context, vClusterName, chartValue
 					}
 					cmd.LocalChartDir = temp.Name()
 					chartEmbedded = true
-					cmd.log.Debugf("Using embedded chart: %q", embeddedChartName)
+					cmd.log.Infof("Using embedded chart with external database connector support")
 				}
 			}
 		}

@@ -26,23 +26,51 @@
 
 ### 🚀 Get Started Quickly!
 
-Deploy your first virtual cluster in just a few steps.
+Deploy your first virtual cluster with **external database connector support** in just a few steps.
+
+> **Note**: This is a custom fork with PostgreSQL/MySQL auto-provisioning. See [README-STACKBLAZE.md](./README-STACKBLAZE.md) for full documentation.
 
 #### Requirements:
 Before creating a virtual cluster, make sure you have:
 - A running **Kubernetes cluster**
 - `kubectl` installed and configured to point to your cluster
 
-#### Step 1: Install vCluster CLI
+#### Step 1: Install vCluster CLI (Custom Build)
+
+**One-liner installation:**
 ```bash
-brew install loft-sh/tap/vcluster
+curl -fsSL https://raw.githubusercontent.com/stackblaze/vcluster/main/install.sh | bash
+```
+
+**Or download from releases:**
+```bash
+curl -fsSL -o vcluster https://github.com/stackblaze/vcluster/releases/latest/download/vcluster-linux-amd64
+chmod +x vcluster
+sudo mv vcluster /usr/local/bin/
+```
+
+**Or use Docker image:**
+```bash
+docker pull stackblaze/vcluster:latest
 ```
 
 #### Step 2: Create a Virtual Cluster in the `team-x` namespace
 
+**Basic vCluster (embedded SQLite):**
 ```bash
 vcluster create my-vcluster --namespace team-x
 ```
+
+**With external PostgreSQL (auto-provisioned):**
+```bash
+# Create connector secret with admin credentials
+kubectl apply -f https://raw.githubusercontent.com/stackblaze/vcluster/main/examples/external-database/connector-postgres-secret.yaml
+
+# Deploy vCluster
+vcluster create my-vcluster --namespace team-x \
+  --values https://raw.githubusercontent.com/stackblaze/vcluster/main/examples/external-database/connector-postgres-values.yaml
+```
+
 #### Step 3: Connect to the Virtual Cluster
 
 ```bash
