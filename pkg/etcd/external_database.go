@@ -741,9 +741,9 @@ export PGPASSWORD='%s'
 echo "Terminating connections to database %s..."
 psql -h %s -p %s -U %s -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid();" || true
 echo "Dropping database %s..."
-psql -h %s -p %s -U %s -d postgres -c "DROP DATABASE IF EXISTS %s;"
+psql -h %s -p %s -U %s -d postgres -c "DROP DATABASE IF EXISTS \"%s\";"
 echo "Dropping user %s..."
-psql -h %s -p %s -U %s -d postgres -c "DROP USER IF EXISTS %s;"
+psql -h %s -p %s -U %s -d postgres -c "DROP USER IF EXISTS \"%s\";"
 echo "Cleanup completed successfully"
 `, adminPassword, dbName, host, port, adminUser, dbName, dbName, host, port, adminUser, dbName, dbUser, host, port, adminUser, dbUser)
 		
