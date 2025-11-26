@@ -538,3 +538,125 @@ func startKineProcess(ctx context.Context, dataSource, listenAddress string, cer
 		osutil.Exit(0)
 	}()
 }
+
+// CleanupExternalDatabase drops the database and user created by the connector
+// This should be called when deleting a vCluster to clean up resources
+func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualClusterConfig) error {
+	externalDB := vConfig.ControlPlane.BackingStore.Database.External
+	
+	// Only cleanup if connector was used
+	if externalDB.Connector == "" {
+		klog.Info("No connector specified, skipping database cleanup")
+		return nil
+	}
+	
+	klog.Infof("Cleaning up database for vCluster '%s'", vConfig.Name)
+	
+	// Read connector secret
+	connectorSecret, err := vConfig.ControlPlaneClient.CoreV1().Secrets(vConfig.ControlPlaneNamespace).Get(ctx, externalDB.Connector, metav1.GetOptions{})
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			klog.Warningf("Connector secret '%s' not found, cannot cleanup database", externalDB.Connector)
+			return nil
+		}
+		return fmt.Errorf("failed to read connector secret: %w", err)
+	}
+	
+	dbType := string(connectorSecret.Data["type"])
+	host := string(connectorSecret.Data["host"])
+	port := string(connectorSecret.Data["port"])
+	adminUser := string(connectorSecret.Data["adminUser"])
+	adminPassword := string(connectorSecret.Data["adminPassword"])
+	
+	// Generate the same database and user names that were created
+	dbName := generateDatabaseName(vConfig.Name, vConfig.ControlPlaneNamespace)
+	dbUser := generateUsername(vConfig.Name, vConfig.ControlPlaneNamespace)
+	
+	klog.Infof("Dropping database '%s' and user '%s'", dbName, dbUser)
+	
+	var db *sql.DB
+	switch dbType {
+	case "postgres":
+		if port == "" {
+			port = "5432"
+		}
+		sslMode := string(connectorSecret.Data["sslMode"])
+		if sslMode == "" {
+			sslMode = "disable"
+		}
+		
+		// Connect to postgres database to drop the vcluster database
+		adminDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=%s",
+			adminUser, adminPassword, host, port, sslMode)
+		
+		db, err = sql.Open("postgres", adminDSN)
+		if err != nil {
+			return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+		}
+		defer db.Close()
+		
+		// Terminate existing connections to the database
+		_, err = db.ExecContext(ctx, fmt.Sprintf(`
+			SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = '%s' AND pid <> pg_backend_pid()
+		`, dbName))
+		if err != nil {
+			klog.Warningf("Failed to terminate connections: %v", err)
+		}
+		
+		// Drop database
+		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+		if err != nil {
+			return fmt.Errorf("failed to drop database: %w", err)
+		}
+		
+		// Drop user
+		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", dbUser))
+		if err != nil {
+			return fmt.Errorf("failed to drop user: %w", err)
+		}
+		
+	case "mysql":
+		if port == "" {
+			port = "3306"
+		}
+		
+		adminDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/mysql?parseTime=true",
+			adminUser, adminPassword, host, port)
+		
+		db, err = sql.Open("mysql", adminDSN)
+		if err != nil {
+			return fmt.Errorf("failed to connect to MySQL: %w", err)
+		}
+		defer db.Close()
+		
+		// Drop database
+		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
+		if err != nil {
+			return fmt.Errorf("failed to drop database: %w", err)
+		}
+		
+		// Drop user
+		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", dbUser))
+		if err != nil {
+			return fmt.Errorf("failed to drop user: %w", err)
+		}
+		
+	default:
+		return fmt.Errorf("unsupported database type: %s", dbType)
+	}
+	
+	klog.Infof("Successfully cleaned up database '%s' and user '%s'", dbName, dbUser)
+	
+	// Also delete the provisioned credentials secret if it exists
+	secretName := fmt.Sprintf("vc-db-%s", vConfig.Name)
+	err = vConfig.ControlPlaneClient.CoreV1().Secrets(vConfig.ControlPlaneNamespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+	if err != nil && !kerrors.IsNotFound(err) {
+		klog.Warningf("Failed to delete credentials secret '%s': %v", secretName, err)
+	} else if err == nil {
+		klog.Infof("Deleted credentials secret '%s'", secretName)
+	}
+	
+	return nil
+}

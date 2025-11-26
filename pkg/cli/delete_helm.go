@@ -11,10 +11,12 @@ import (
 	managementv1 "github.com/loft-sh/api/v4/pkg/apis/management/v1"
 	"github.com/loft-sh/log"
 	"github.com/loft-sh/vcluster/config"
+	vclusterconfig "github.com/loft-sh/vcluster/config"
 	"github.com/loft-sh/vcluster/pkg/cli/find"
 	"github.com/loft-sh/vcluster/pkg/cli/flags"
 	"github.com/loft-sh/vcluster/pkg/cli/localkubernetes"
 	"github.com/loft-sh/vcluster/pkg/coredns"
+	"github.com/loft-sh/vcluster/pkg/etcd"
 	"github.com/loft-sh/vcluster/pkg/helm"
 	"github.com/loft-sh/vcluster/pkg/platform"
 	"github.com/loft-sh/vcluster/pkg/util/clihelper"
@@ -40,6 +42,7 @@ type DeleteOptions struct {
 	DeleteConfigMap     bool
 	AutoDeleteNamespace bool
 	IgnoreNotFound      bool
+	DeleteDatabase      bool
 }
 
 type deleteHelm struct {
@@ -140,6 +143,36 @@ func DeleteHelm(ctx context.Context, platformClient platform.Client, options *De
 		return err
 	}
 	cmd.log.Donef("Successfully deleted virtual cluster %s in namespace %s", vClusterName, cmd.Namespace)
+
+	// delete external database if requested
+	if cmd.DeleteDatabase {
+		cmd.log.Infof("Cleaning up external database...")
+		vConfig := &vclusterconfig.VirtualClusterConfig{
+			Name:                   vClusterName,
+			ControlPlaneNamespace:  cmd.Namespace,
+			ControlPlaneClient:     cmd.kubeClient,
+			ControlPlane: vclusterconfig.ControlPlane{
+				BackingStore: vclusterconfig.BackingStore{
+					Database: vclusterconfig.Database{
+						External: vclusterconfig.ExternalDatabaseKine{
+							DatabaseKine: vclusterconfig.DatabaseKine{
+								Enabled: vclusterConfig.ControlPlane.BackingStore.Database.External.Enabled,
+							},
+							Connector: vclusterConfig.ControlPlane.BackingStore.Database.External.Connector,
+						},
+					},
+				},
+			},
+		}
+		
+		err = etcd.CleanupExternalDatabase(ctx, vConfig)
+		if err != nil {
+			cmd.log.Warnf("Failed to cleanup external database: %v", err)
+			// Don't fail the delete if database cleanup fails
+		} else {
+			cmd.log.Donef("Successfully cleaned up external database")
+		}
+	}
 
 	// delete priorityclasses
 	if err = deletePriorityClasses(ctx, cmd, vClusterName); err != nil {
