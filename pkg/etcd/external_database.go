@@ -553,7 +553,7 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	klog.Infof("Cleaning up database for vCluster '%s'", vConfig.Name)
 	
 	// Read connector secret
-	connectorSecret, err := vConfig.ControlPlaneClient.CoreV1().Secrets(vConfig.ControlPlaneNamespace).Get(ctx, externalDB.Connector, metav1.GetOptions{})
+	connectorSecret, err := vConfig.HostClient.CoreV1().Secrets(vConfig.HostNamespace).Get(ctx, externalDB.Connector, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			klog.Warningf("Connector secret '%s' not found, cannot cleanup database", externalDB.Connector)
@@ -569,8 +569,8 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	adminPassword := string(connectorSecret.Data["adminPassword"])
 	
 	// Generate the same database and user names that were created
-	dbName := generateDatabaseName(vConfig.Name, vConfig.ControlPlaneNamespace)
-	dbUser := generateUsername(vConfig.Name, vConfig.ControlPlaneNamespace)
+	dbName := generateDatabaseName(vConfig.Name, vConfig.HostNamespace)
+	dbUser := sanitizeIdentifier(fmt.Sprintf("vcluster_%s", vConfig.Name))
 	
 	klog.Infof("Dropping database '%s' and user '%s'", dbName, dbUser)
 	
@@ -651,7 +651,7 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	
 	// Also delete the provisioned credentials secret if it exists
 	secretName := fmt.Sprintf("vc-db-%s", vConfig.Name)
-	err = vConfig.ControlPlaneClient.CoreV1().Secrets(vConfig.ControlPlaneNamespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+	err = vConfig.HostClient.CoreV1().Secrets(vConfig.HostNamespace).Delete(ctx, secretName, metav1.DeleteOptions{})
 	if err != nil && !kerrors.IsNotFound(err) {
 		klog.Warningf("Failed to delete credentials secret '%s': %v", secretName, err)
 	} else if err == nil {

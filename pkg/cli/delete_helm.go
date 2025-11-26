@@ -148,17 +148,19 @@ func DeleteHelm(ctx context.Context, platformClient platform.Client, options *De
 	if cmd.DeleteDatabase {
 		cmd.log.Infof("Cleaning up external database...")
 		vConfig := &vclusterconfig.VirtualClusterConfig{
-			Name:                   vClusterName,
-			ControlPlaneNamespace:  cmd.Namespace,
-			ControlPlaneClient:     cmd.kubeClient,
-			ControlPlane: vclusterconfig.ControlPlane{
-				BackingStore: vclusterconfig.BackingStore{
-					Database: vclusterconfig.Database{
-						External: vclusterconfig.ExternalDatabaseKine{
-							DatabaseKine: vclusterconfig.DatabaseKine{
-								Enabled: vclusterConfig.ControlPlane.BackingStore.Database.External.Enabled,
+			Name:          vClusterName,
+			HostNamespace: cmd.Namespace,
+			HostClient:    cmd.kubeClient,
+			Config: vclusterconfig.Config{
+				ControlPlane: vclusterconfig.ControlPlane{
+					BackingStore: vclusterconfig.BackingStore{
+						Database: vclusterconfig.Database{
+							External: vclusterconfig.ExternalDatabaseKine{
+								DatabaseKine: vclusterconfig.DatabaseKine{
+									Enabled: vclusterConfig.ControlPlane.BackingStore.Database.External.Enabled,
+								},
+								Connector: vclusterConfig.ControlPlane.BackingStore.Database.External.Connector,
 							},
-							Connector: vclusterConfig.ControlPlane.BackingStore.Database.External.Connector,
 						},
 					},
 				},
