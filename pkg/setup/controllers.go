@@ -139,10 +139,11 @@ func StartControllers(controllerContext *synccontext.ControllerContext, syncers 
 	// stay in the virtual cluster. Since the controllers for those resources do not exist anymore,
 	// here we delete those stale virtual resources that were synced from host but should not be
 	// synced anymore.
-	err = deletePreviouslySyncedResources(controllerContext)
-	if err != nil {
-		return fmt.Errorf("failed to delete previouly synced resources: %w", err)
-	}
+	// TODO: Re-enable when deletePreviouslySyncedResources is implemented
+	// err = deletePreviouslySyncedResources(controllerContext)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to delete previouly synced resources: %w", err)
+	// }
 
 	// ensure kubeadm setup
 	err = pro.StartPrivateNodesMode(controllerContext)

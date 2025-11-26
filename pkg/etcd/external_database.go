@@ -541,7 +541,8 @@ func startKineProcess(ctx context.Context, dataSource, listenAddress string, cer
 }
 
 // CleanupExternalDatabase drops the database and user created by the connector
-// This is called from the vCluster's shutdown handler, using the same approach as database creation
+// It creates a Kubernetes Job to run the cleanup inside the cluster (to access cluster DNS)
+// The Job runs AFTER the pod is deleted, so Kine is already disconnected
 func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualClusterConfig) error {
 	externalDB := vConfig.ControlPlane.BackingStore.Database.External
 	
@@ -553,7 +554,7 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	
 	klog.Infof("Cleaning up database for vCluster '%s'", vConfig.Name)
 	
-	// Read connector secret
+	// Read connector secret to validate it exists
 	connectorSecret, err := vConfig.HostClient.CoreV1().Secrets(vConfig.HostNamespace).Get(ctx, externalDB.Connector, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
@@ -563,28 +564,20 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 		return fmt.Errorf("failed to read connector secret: %w", err)
 	}
 	
-	// Parse connector configuration
-	connector, err := parseConnectorSecret(connectorSecret)
-	if err != nil {
-		return fmt.Errorf("failed to parse connector secret: %w", err)
-	}
-	
 	// Generate the same database and user names that were created
 	dbName := generateDatabaseName(vConfig.Name, vConfig.HostNamespace)
 	dbUser := sanitizeIdentifier(fmt.Sprintf("vcluster_%s", vConfig.Name))
 	
-	klog.Infof("Dropping database '%s' and user '%s'", dbName, dbUser)
+	klog.Infof("Creating cleanup job for database '%s' and user '%s'", dbName, dbUser)
 	
-	// Build admin connection string
-	adminDataSource := buildAdminDataSource(connector)
-	
-	// Drop database and user directly (same as creation, but in reverse)
-	err = dropDatabaseAndUser(ctx, connector.Type, adminDataSource, dbName, dbUser)
+	// Create a Kubernetes Job to run the cleanup inside the cluster
+	// This runs AFTER the pod is deleted, so Kine is already disconnected
+	err = createCleanupJob(ctx, vConfig, connectorSecret, dbName, dbUser)
 	if err != nil {
-		return fmt.Errorf("failed to drop database and user: %w", err)
+		return fmt.Errorf("failed to create cleanup job: %w", err)
 	}
 	
-	klog.Infof("Successfully cleaned up database '%s' and user '%s'", dbName, dbUser)
+	klog.Infof("Cleanup job created successfully for vCluster '%s'", vConfig.Name)
 	
 	// Also delete the provisioned credentials secret if it exists
 	secretName := fmt.Sprintf("vc-db-%s", vConfig.Name)
@@ -652,7 +645,8 @@ func dropMySQLDatabaseAndUser(ctx context.Context, db *sql.DB, dbName, dbUser st
 }
 
 func dropPostgresDatabaseAndUser(ctx context.Context, db *sql.DB, dbName, dbUser string) error {
-	// Terminate existing connections to the database
+	// First, terminate all existing connections to the database (including Kine)
+	klog.Infof("Terminating all connections to database '%s'...", dbName)
 	_, err := db.ExecContext(ctx, fmt.Sprintf(`
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
@@ -660,15 +654,49 @@ func dropPostgresDatabaseAndUser(ctx context.Context, db *sql.DB, dbName, dbUser
 	`, dbName))
 	if err != nil {
 		klog.Warningf("Failed to terminate connections: %v", err)
+	} else {
+		klog.Info("Successfully terminated database connections")
 	}
 
-	// Drop database
+	// Wait a moment for connections to fully close
+	// This ensures Kine has time to disconnect before we try to drop the database
+	time.Sleep(2 * time.Second)
+
+	// Verify no active connections remain (with retries)
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		var activeConnections int
+		err := db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, dbName).Scan(&activeConnections)
+		
+		if err != nil {
+			klog.Warningf("Failed to check active connections: %v", err)
+			break
+		}
+		
+		if activeConnections == 0 {
+			klog.Info("No active connections remaining, safe to drop database")
+			break
+		}
+		
+		klog.Infof("Waiting for %d active connections to close... (attempt %d/%d)", activeConnections, i+1, maxRetries)
+		if i < maxRetries-1 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	// Drop database (even if connections still exist, PostgreSQL will handle it)
+	klog.Infof("Dropping database '%s'...", dbName)
 	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", sanitizeIdentifier(dbName)))
 	if err != nil {
 		return fmt.Errorf("drop database: %w", err)
 	}
 
 	// Drop user
+	klog.Infof("Dropping user '%s'...", dbUser)
 	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", sanitizeIdentifier(dbUser)))
 	if err != nil {
 		return fmt.Errorf("drop user: %w", err)
@@ -678,9 +706,9 @@ func dropPostgresDatabaseAndUser(ctx context.Context, db *sql.DB, dbName, dbUser
 	return nil
 }
 
-// DEPRECATED: createCleanupJob - No longer used, cleanup now happens in vCluster shutdown handler
-// Keeping this code temporarily for reference, will be removed in next commit
-func createCleanupJob_DEPRECATED(ctx context.Context, vConfig *config.VirtualClusterConfig, connectorSecret *corev1.Secret, dbName, dbUser string) error {
+// createCleanupJob creates a Kubernetes Job to cleanup the database
+// The Job runs inside the cluster where DNS works, and AFTER the pod is deleted (so Kine is disconnected)
+func createCleanupJob(ctx context.Context, vConfig *config.VirtualClusterConfig, connectorSecret *corev1.Secret, dbName, dbUser string) error {
 	dbType := string(connectorSecret.Data["type"])
 	host := string(connectorSecret.Data["host"])
 	port := string(connectorSecret.Data["port"])
