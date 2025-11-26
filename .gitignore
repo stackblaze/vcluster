@@ -16,3 +16,7 @@ profile.out
 tests/__snapshot__
 /licenses
 custom-gcl
+
+# Release binaries
+release/
+helm-binary
