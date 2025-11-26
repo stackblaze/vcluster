@@ -925,6 +925,12 @@ func (c *Config) IsVirtualSchedulerEnabled() bool {
 }
 
 func (c *Config) IsConfiguredForSleepMode() bool {
+	// Check if configured via helm values (non-platform)
+	if c != nil && c.SleepMode != nil && c.SleepMode.Enabled {
+		return true
+	}
+
+	// Check if configured via platform
 	if c != nil && c.External != nil && c.External["platform"] == nil {
 		return false
 	}

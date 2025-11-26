@@ -352,11 +352,20 @@ func CreateHelm(ctx context.Context, options *CreateOptions, globalFlags *flags.
 		}
 	}
 
+	// Only require platform agent if sleep mode is configured via platform (external.platform)
+	// Non-platform sleep mode (sleepMode.enabled) doesn't require the agent
 	if vClusterConfig.IsConfiguredForSleepMode() {
-		if agentDeployed, err := cmd.isLoftAgentDeployed(ctx); err != nil {
-			return fmt.Errorf("is agent deployed: %w", err)
-		} else if !agentDeployed {
-			return fmt.Errorf("sleep mode is configured but requires an agent to be installed on the host cluster. To install the agent using the vCluster CLI, run: vcluster platform add cluster")
+		// Check if this is platform-based sleep mode
+		isPlatformSleepMode := vClusterConfig.External != nil &&
+			vClusterConfig.External["platform"] != nil &&
+			(vClusterConfig.External["platform"]["autoSleep"] != nil || vClusterConfig.External["platform"]["autoDelete"] != nil)
+
+		if isPlatformSleepMode {
+			if agentDeployed, err := cmd.isLoftAgentDeployed(ctx); err != nil {
+				return fmt.Errorf("is agent deployed: %w", err)
+			} else if !agentDeployed {
+				return fmt.Errorf("sleep mode is configured but requires an agent to be installed on the host cluster. To install the agent using the vCluster CLI, run: vcluster platform add cluster")
+			}
 		}
 	}
 

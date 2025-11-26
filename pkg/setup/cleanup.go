@@ -1,78 +1,91 @@
 package setup
 
 import (
-	"errors"
-	"fmt"
+	"context"
+	"sync"
+	"time"
 
-	"github.com/loft-sh/vcluster/config"
-	"github.com/loft-sh/vcluster/pkg/syncer/synccontext"
-	"github.com/loft-sh/vcluster/pkg/util/translate"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	vclusterconfig "github.com/loft-sh/vcluster/config"
+	"github.com/loft-sh/vcluster/pkg/config"
+	"github.com/loft-sh/vcluster/pkg/etcd"
+	"github.com/loft-sh/vcluster/pkg/util/osutil"
+	"k8s.io/klog/v2"
 )
 
-// deletePreviouslySyncedResources deletes resources that were synced from host to virtual, but
-// should not be synced anymore, because from host syncing has been disabled.
-func deletePreviouslySyncedResources(ctx *synccontext.ControllerContext) error {
-	err := deletePreviouslyReplicatedServices(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to delete previously synced services: %w", err)
-	}
-	return nil
-}
+var (
+	cleanupHandlerRegistered = false
+	cleanupHandlerMu         sync.Mutex
+)
 
-// deletePreviouslyReplicatedServices deletes services that were synced from host to virtual, but
-// should not be synced anymore, because from host syncing for services has been disabled.
-func deletePreviouslyReplicatedServices(ctx *synccontext.ControllerContext) error {
-	virtualClient := ctx.VirtualManager.GetClient()
-	listOptions := client.ListOptions{
-		LabelSelector: labels.SelectorFromSet(labels.Set{
-			translate.ControllerLabel: "vcluster",
-		}),
-	}
-	previouslySyncedServices := &corev1.ServiceList{}
-	err := virtualClient.List(ctx, previouslySyncedServices, &listOptions)
-	if err != nil {
-		return fmt.Errorf("failed to list previously synced services: %w", err)
-	}
-	if len(previouslySyncedServices.Items) == 0 {
-		return nil
+// RegisterDatabaseCleanupHandler registers a cleanup handler that will be called
+// when the vCluster receives a termination signal (SIGTERM/SIGINT).
+// This allows the vCluster to clean up its own database before shutting down,
+// using the same approach as database creation.
+func RegisterDatabaseCleanupHandler(ctx context.Context, vConfig *config.VirtualClusterConfig) {
+	// Only register if external database connector is used
+	connectorName := vConfig.ControlPlane.BackingStore.Database.External.Connector
+	if connectorName == "" {
+		klog.Info("No external database connector, skipping cleanup handler registration")
+		return
 	}
 
-	logger := ctx.VirtualManager.GetLogger()
-	logger.Info("deleting previously synced services")
-	var deleteErrors []error
-	for _, service := range previouslySyncedServices.Items {
-		if replicateServicesFromHostConfigContainsVirtualService(ctx.Config.Networking.ReplicateServices, service) {
-			logger.Info("virtual service has replication config, not deleting it", "name", service.Name, "namespace", service.Namespace)
-			continue
+	cleanupHandlerMu.Lock()
+	defer cleanupHandlerMu.Unlock()
+
+	if cleanupHandlerRegistered {
+		klog.Warning("Cleanup handler already registered, skipping")
+		return
+	}
+
+	// Store values needed for cleanup (don't capture vConfig pointer which might become invalid)
+	vClusterName := vConfig.Name
+	hostNamespace := vConfig.HostNamespace
+	hostClient := vConfig.HostClient // This should remain valid
+	
+	// Store the connector config in the closure
+	connectorConfig := vConfig.ControlPlane.BackingStore.Database.External
+
+	klog.Infof("Registering database cleanup handler for vCluster '%s' with connector '%s'", 
+		vClusterName, connectorName)
+
+	osutil.RegisterInterruptHandler(func() {
+		klog.Info("=== SHUTDOWN HANDLER TRIGGERED ===")
+		klog.Infof("Shutdown signal received for vCluster '%s', cleaning up external database...", vClusterName)
+		
+		// Create a new context with timeout for cleanup (the original ctx might be cancelled)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		
+		// Reconstruct vConfig for cleanup (with stored values)
+		cleanupVConfig := &config.VirtualClusterConfig{
+			Name:          vClusterName,
+			HostNamespace: hostNamespace,
+			HostClient:    hostClient,
+			Config: vclusterconfig.Config{
+				ControlPlane: vclusterconfig.ControlPlane{
+					BackingStore: vclusterconfig.BackingStore{
+						Database: vclusterconfig.Database{
+							External: connectorConfig,
+						},
+					},
+				},
+			},
 		}
-		logger.Info("deleting previously synced service", "name", service.Name, "namespace", service.Namespace)
-		err = virtualClient.Delete(ctx, &service)
+		
+		klog.Infof("Calling CleanupExternalDatabase for vCluster '%s'", vClusterName)
+		
+		// Use the same cleanup logic
+		err := etcd.CleanupExternalDatabase(cleanupCtx, cleanupVConfig)
 		if err != nil {
-			deleteErrors = append(deleteErrors, fmt.Errorf("failed to delete previously synced service: %w", err))
-			continue
+			klog.Errorf("Failed to cleanup external database: %v", err)
+			// Don't fail the shutdown, just log the error
+		} else {
+			klog.Info("Successfully cleaned up external database")
 		}
-		logger.Info("deleted previously synced service", "name", service.Name, "namespace", service.Namespace)
-	}
-	if len(deleteErrors) > 0 {
-		return fmt.Errorf("failed to delete one or more previously synced services: %w", errors.Join(deleteErrors...))
-	}
-	logger.Info("finished deleting previously synced services")
-	return nil
-}
-
-func replicateServicesFromHostConfigContainsVirtualService(replicateServicesConfig config.ReplicateServices, service corev1.Service) bool {
-	serviceNamespacedName := types.NamespacedName{
-		Namespace: service.Namespace,
-		Name:      service.Name,
-	}.String()
-	for _, serviceMapping := range replicateServicesConfig.FromHost {
-		if serviceMapping.To == serviceNamespacedName {
-			return true
-		}
-	}
-	return false
+		
+		klog.Info("=== SHUTDOWN HANDLER COMPLETE ===")
+	})
+	
+	cleanupHandlerRegistered = true
+	klog.Info("Cleanup handler registered successfully")
 }

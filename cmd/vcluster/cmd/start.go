@@ -126,6 +126,12 @@ func StartInCluster(ctx context.Context, options *StartOptions) error {
 		return fmt.Errorf("initialize: %w", err)
 	}
 
+	// Note: Database cleanup is handled by a Kubernetes Job created by the CLI during deletion
+	// This is more reliable than a shutdown handler because:
+	// 1. Job runs AFTER pod is deleted (Kine already disconnected)
+	// 2. Job runs inside cluster (has DNS access)
+	// 3. Can be monitored and retried if needed
+
 	// set features for plugins to recognize
 	plugin.DefaultManager.SetProFeatures(pro.LicenseFeatures())
 

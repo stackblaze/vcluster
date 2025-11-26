@@ -24,6 +24,7 @@ func AddHelmFlags(cmd *cobra.Command, options *cli.DeleteOptions) {
 	cmd.Flags().BoolVar(&options.DeleteNamespace, "delete-namespace", false, "If enabled, vCluster will delete the namespace of the vCluster. In cases when sync.toHost.namespaces was enabled, any namespaces and resources created due to syncing from the vCluster to the host cluster will also be deleted.")
 	cmd.Flags().BoolVar(&options.AutoDeleteNamespace, "auto-delete-namespace", true, "If enabled, vcluster will delete the namespace of the vcluster if it was created by vclusterctl. In the case of multi-namespace mode, will also delete all other namespaces created by vcluster")
 	cmd.Flags().BoolVar(&options.IgnoreNotFound, "ignore-not-found", false, "If enabled, vcluster will not error out in case the target vcluster does not exist")
+	cmd.Flags().BoolVar(&options.KeepDatabase, "keep-database", false, "If enabled, vcluster will keep the external database and user created by the connector (default: auto-cleanup)")
 }
 
 func AddPlatformFlags(cmd *cobra.Command, options *cli.DeleteOptions, prefixes ...string) {

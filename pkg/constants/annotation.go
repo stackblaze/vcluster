@@ -26,6 +26,9 @@ const (
 
 	VClusterNamespaceAnnotation = "vcluster.loft.sh/vcluster-namespace"
 	VClusterNameAnnotation      = "vcluster.loft.sh/vcluster-name"
+
+	// SleepModeLastActivityAnnotation tracks the last time a vCluster received an API request
+	SleepModeLastActivityAnnotation = "vcluster.loft.sh/last-activity"
 )
 
 func PausedAnnotation(isRestore bool) string {
