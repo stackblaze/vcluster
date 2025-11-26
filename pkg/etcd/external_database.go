@@ -12,6 +12,7 @@ import (
 	"github.com/loft-sh/vcluster/pkg/constants"
 	"github.com/loft-sh/vcluster/pkg/util/command"
 	"github.com/loft-sh/vcluster/pkg/util/osutil"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -541,6 +542,7 @@ func startKineProcess(ctx context.Context, dataSource, listenAddress string, cer
 
 // CleanupExternalDatabase drops the database and user created by the connector
 // This should be called when deleting a vCluster to clean up resources
+// It creates a Kubernetes Job to run the cleanup inside the cluster (to access cluster DNS)
 func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualClusterConfig) error {
 	externalDB := vConfig.ControlPlane.BackingStore.Database.External
 	
@@ -552,7 +554,7 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	
 	klog.Infof("Cleaning up database for vCluster '%s'", vConfig.Name)
 	
-	// Read connector secret
+	// Read connector secret to validate it exists
 	connectorSecret, err := vConfig.HostClient.CoreV1().Secrets(vConfig.HostNamespace).Get(ctx, externalDB.Connector, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
@@ -562,92 +564,19 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 		return fmt.Errorf("failed to read connector secret: %w", err)
 	}
 	
-	dbType := string(connectorSecret.Data["type"])
-	host := string(connectorSecret.Data["host"])
-	port := string(connectorSecret.Data["port"])
-	adminUser := string(connectorSecret.Data["adminUser"])
-	adminPassword := string(connectorSecret.Data["adminPassword"])
-	
 	// Generate the same database and user names that were created
 	dbName := generateDatabaseName(vConfig.Name, vConfig.HostNamespace)
 	dbUser := sanitizeIdentifier(fmt.Sprintf("vcluster_%s", vConfig.Name))
 	
-	klog.Infof("Dropping database '%s' and user '%s'", dbName, dbUser)
+	klog.Infof("Creating cleanup job for database '%s' and user '%s'", dbName, dbUser)
 	
-	var db *sql.DB
-	switch dbType {
-	case "postgres":
-		if port == "" {
-			port = "5432"
-		}
-		sslMode := string(connectorSecret.Data["sslMode"])
-		if sslMode == "" {
-			sslMode = "disable"
-		}
-		
-		// Connect to postgres database to drop the vcluster database
-		adminDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=%s",
-			adminUser, adminPassword, host, port, sslMode)
-		
-		db, err = sql.Open("postgres", adminDSN)
-		if err != nil {
-			return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
-		}
-		defer db.Close()
-		
-		// Terminate existing connections to the database
-		_, err = db.ExecContext(ctx, fmt.Sprintf(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = '%s' AND pid <> pg_backend_pid()
-		`, dbName))
-		if err != nil {
-			klog.Warningf("Failed to terminate connections: %v", err)
-		}
-		
-		// Drop database
-		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
-		if err != nil {
-			return fmt.Errorf("failed to drop database: %w", err)
-		}
-		
-		// Drop user
-		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", dbUser))
-		if err != nil {
-			return fmt.Errorf("failed to drop user: %w", err)
-		}
-		
-	case "mysql":
-		if port == "" {
-			port = "3306"
-		}
-		
-		adminDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/mysql?parseTime=true",
-			adminUser, adminPassword, host, port)
-		
-		db, err = sql.Open("mysql", adminDSN)
-		if err != nil {
-			return fmt.Errorf("failed to connect to MySQL: %w", err)
-		}
-		defer db.Close()
-		
-		// Drop database
-		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
-		if err != nil {
-			return fmt.Errorf("failed to drop database: %w", err)
-		}
-		
-		// Drop user
-		_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", dbUser))
-		if err != nil {
-			return fmt.Errorf("failed to drop user: %w", err)
-		}
-		
-	default:
-		return fmt.Errorf("unsupported database type: %s", dbType)
+	// Create a Kubernetes Job to run the cleanup inside the cluster
+	err = createCleanupJob(ctx, vConfig, connectorSecret, dbName, dbUser)
+	if err != nil {
+		return fmt.Errorf("failed to create cleanup job: %w", err)
 	}
 	
-	klog.Infof("Successfully cleaned up database '%s' and user '%s'", dbName, dbUser)
+	klog.Infof("Cleanup job created successfully for vCluster '%s'", vConfig.Name)
 	
 	// Also delete the provisioned credentials secret if it exists
 	secretName := fmt.Sprintf("vc-db-%s", vConfig.Name)
@@ -657,6 +586,144 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	} else if err == nil {
 		klog.Infof("Deleted credentials secret '%s'", secretName)
 	}
+	
+	return nil
+}
+
+// createCleanupJob creates a Kubernetes Job to cleanup the database
+func createCleanupJob(ctx context.Context, vConfig *config.VirtualClusterConfig, connectorSecret *corev1.Secret, dbName, dbUser string) error {
+	dbType := string(connectorSecret.Data["type"])
+	host := string(connectorSecret.Data["host"])
+	port := string(connectorSecret.Data["port"])
+	adminUser := string(connectorSecret.Data["adminUser"])
+	adminPassword := string(connectorSecret.Data["adminPassword"])
+	sslMode := string(connectorSecret.Data["sslMode"])
+	
+	if port == "" {
+		if dbType == "postgres" {
+			port = "5432"
+		} else if dbType == "mysql" {
+			port = "3306"
+		}
+	}
+	
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	
+	// Build the cleanup script based on database type
+	var cleanupScript string
+	var image string
+	
+	switch dbType {
+	case "postgres":
+		image = "postgres:15"
+		cleanupScript = fmt.Sprintf(`#!/bin/sh
+set -e
+export PGPASSWORD='%s'
+echo "Terminating connections to database %s..."
+psql -h %s -p %s -U %s -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid();" || true
+echo "Dropping database %s..."
+psql -h %s -p %s -U %s -d postgres -c "DROP DATABASE IF EXISTS %s;"
+echo "Dropping user %s..."
+psql -h %s -p %s -U %s -d postgres -c "DROP USER IF EXISTS %s;"
+echo "Cleanup completed successfully"
+`, adminPassword, dbName, host, port, adminUser, dbName, dbName, host, port, adminUser, dbName, dbUser, host, port, adminUser, dbUser)
+		
+	case "mysql":
+		image = "mysql:8"
+		// Use printf to avoid backtick escaping issues in Go raw strings
+		cleanupScript = fmt.Sprintf(`#!/bin/sh
+set -e
+echo "Dropping database %s..."
+mysql -h %s -P %s -u %s -p'%s' -e "DROP DATABASE IF EXISTS %s;"
+echo "Dropping user %s..."
+mysql -h %s -P %s -u %s -p'%s' -e "DROP USER IF EXISTS '%s'@'%%%%';"
+echo "Cleanup completed successfully"
+`, dbName, host, port, adminUser, adminPassword, dbName, dbUser, host, port, adminUser, adminPassword, dbUser)
+		
+	default:
+		return fmt.Errorf("unsupported database type: %s", dbType)
+	}
+	
+	// Create a ConfigMap with the cleanup script
+	configMapName := fmt.Sprintf("vc-db-cleanup-%s", vConfig.Name)
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: vConfig.HostNamespace,
+		},
+		Data: map[string]string{
+			"cleanup.sh": cleanupScript,
+		},
+	}
+	
+	_, err := vConfig.HostClient.CoreV1().ConfigMaps(vConfig.HostNamespace).Create(ctx, configMap, metav1.CreateOptions{})
+	if err != nil && !kerrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create cleanup configmap: %w", err)
+	}
+	
+	// Create the cleanup Job
+	jobName := fmt.Sprintf("vc-db-cleanup-%s", vConfig.Name)
+	backoffLimit := int32(3)
+	ttlSecondsAfterFinished := int32(300) // Clean up job after 5 minutes
+	
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: vConfig.HostNamespace,
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttlSecondsAfterFinished,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					DNSPolicy:     corev1.DNSClusterFirst,
+					Containers: []corev1.Container{
+						{
+							Name:    "cleanup",
+							Image:   image,
+							Command: []string{"/bin/sh", "/scripts/cleanup.sh"},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "scripts",
+									MountPath: "/scripts",
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "scripts",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: configMapName,
+									},
+									DefaultMode: func() *int32 { m := int32(0755); return &m }(),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	
+	_, err = vConfig.HostClient.BatchV1().Jobs(vConfig.HostNamespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil && !kerrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create cleanup job: %w", err)
+	}
+	
+	klog.Infof("Created cleanup job '%s' in namespace '%s'", jobName, vConfig.HostNamespace)
+	
+	// Clean up the ConfigMap after the job is created
+	// The job will have already mounted it, so it's safe to delete
+	go func() {
+		time.Sleep(10 * time.Second)
+		_ = vConfig.HostClient.CoreV1().ConfigMaps(vConfig.HostNamespace).Delete(context.Background(), configMapName, metav1.DeleteOptions{})
+	}()
 	
 	return nil
 }
