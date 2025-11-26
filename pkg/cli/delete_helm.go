@@ -15,6 +15,7 @@ import (
 	"github.com/loft-sh/vcluster/pkg/cli/find"
 	"github.com/loft-sh/vcluster/pkg/cli/flags"
 	"github.com/loft-sh/vcluster/pkg/cli/localkubernetes"
+	pkgconfig "github.com/loft-sh/vcluster/pkg/config"
 	"github.com/loft-sh/vcluster/pkg/coredns"
 	"github.com/loft-sh/vcluster/pkg/etcd"
 	"github.com/loft-sh/vcluster/pkg/helm"
@@ -147,7 +148,7 @@ func DeleteHelm(ctx context.Context, platformClient platform.Client, options *De
 	// delete external database if requested
 	if cmd.DeleteDatabase {
 		cmd.log.Infof("Cleaning up external database...")
-		vConfig := &vclusterconfig.VirtualClusterConfig{
+		vConfig := &pkgconfig.VirtualClusterConfig{
 			Name:          vClusterName,
 			HostNamespace: cmd.Namespace,
 			HostClient:    cmd.kubeClient,
