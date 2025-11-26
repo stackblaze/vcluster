@@ -1,0 +1,41 @@
+# vCluster configuration with PostgreSQL database and Sleep Mode enabled
+#
+# Prerequisites:
+# 1. PostgreSQL server running and accessible
+# 2. Connector secret created (see below)
+#
+# Usage:
+#   kubectl apply -f connector-secret.yaml
+#   vcluster create test-sleep -f test-sleep-mode-postgres.yaml -n test-sleep
+
+# Enable sleep mode
+sleepMode:
+  enabled: true
+  autoSleep:
+    # Sleep after 5 minutes of inactivity (for testing - use longer in production)
+    afterInactivity: "5m"
+    # Optional: Schedule-based sleep
+    # schedule: "0 22 * * *"  # Sleep at 10 PM daily
+  # Optional: Auto-wakeup schedule
+  # autoWakeup:
+  #   schedule: "0 8 * * 1-5"  # Wake at 8 AM on weekdays
+
+# RBAC permissions for sleep mode controller
+rbac:
+  role:
+    extraRules:
+      # Allow sleep mode controller to update deployments and statefulsets for activity tracking
+      - apiGroups: ["apps"]
+        resources: ["deployments", "statefulsets"]
+        verbs: ["patch", "update"]
+
+# PostgreSQL database configuration
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        # Use connector for auto-provisioning
+        connector: "postgres-connector"
+        dataSource: "placeholder"  # Will be replaced by connector
+
