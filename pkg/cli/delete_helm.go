@@ -145,38 +145,16 @@ func DeleteHelm(ctx context.Context, platformClient platform.Client, options *De
 	}
 	cmd.log.Donef("Successfully deleted virtual cluster %s in namespace %s", vClusterName, cmd.Namespace)
 
-	// automatically cleanup external database if connector was used (unless --keep-database is set)
-	if !cmd.KeepDatabase && vclusterConfig.ControlPlane.BackingStore.Database.External.Connector != "" {
-		cmd.log.Infof("Cleaning up external database (auto-provisioned by connector)...")
-		vConfig := &pkgconfig.VirtualClusterConfig{
-			Name:          vClusterName,
-			HostNamespace: cmd.Namespace,
-			HostClient:    cmd.kubeClient,
-			Config: vclusterconfig.Config{
-				ControlPlane: vclusterconfig.ControlPlane{
-					BackingStore: vclusterconfig.BackingStore{
-						Database: vclusterconfig.Database{
-							External: vclusterconfig.ExternalDatabaseKine{
-								DatabaseKine: vclusterconfig.DatabaseKine{
-									Enabled: vclusterConfig.ControlPlane.BackingStore.Database.External.Enabled,
-								},
-								Connector: vclusterConfig.ControlPlane.BackingStore.Database.External.Connector,
-							},
-						},
-					},
-				},
-			},
-		}
-		
-		err = etcd.CleanupExternalDatabase(ctx, vConfig)
-		if err != nil {
-			cmd.log.Warnf("Failed to cleanup external database: %v", err)
-			// Don't fail the delete if database cleanup fails
+	// Database cleanup is now handled by the vCluster's shutdown handler
+	// The vCluster pod will clean up its own database when it receives SIGTERM
+	// This is the same approach used during database creation
+	if vclusterConfig.ControlPlane.BackingStore.Database.External.Connector != "" {
+		if cmd.KeepDatabase {
+			cmd.log.Infof("Note: Database will be kept (--keep-database flag set)")
+			cmd.log.Infof("The vCluster shutdown handler will skip database cleanup")
 		} else {
-			cmd.log.Donef("Successfully cleaned up external database")
+			cmd.log.Infof("Database cleanup will be handled by vCluster shutdown handler")
 		}
-	} else if cmd.KeepDatabase && vclusterConfig.ControlPlane.BackingStore.Database.External.Connector != "" {
-		cmd.log.Infof("Keeping external database (--keep-database flag set)")
 	}
 
 	// delete priorityclasses

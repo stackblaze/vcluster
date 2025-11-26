@@ -541,8 +541,7 @@ func startKineProcess(ctx context.Context, dataSource, listenAddress string, cer
 }
 
 // CleanupExternalDatabase drops the database and user created by the connector
-// This should be called when deleting a vCluster to clean up resources
-// It creates a Kubernetes Job to run the cleanup inside the cluster (to access cluster DNS)
+// This is called from the vCluster's shutdown handler, using the same approach as database creation
 func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualClusterConfig) error {
 	externalDB := vConfig.ControlPlane.BackingStore.Database.External
 	
@@ -554,7 +553,7 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	
 	klog.Infof("Cleaning up database for vCluster '%s'", vConfig.Name)
 	
-	// Read connector secret to validate it exists
+	// Read connector secret
 	connectorSecret, err := vConfig.HostClient.CoreV1().Secrets(vConfig.HostNamespace).Get(ctx, externalDB.Connector, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
@@ -564,19 +563,28 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 		return fmt.Errorf("failed to read connector secret: %w", err)
 	}
 	
+	// Parse connector configuration
+	connector, err := parseConnectorSecret(connectorSecret)
+	if err != nil {
+		return fmt.Errorf("failed to parse connector secret: %w", err)
+	}
+	
 	// Generate the same database and user names that were created
 	dbName := generateDatabaseName(vConfig.Name, vConfig.HostNamespace)
 	dbUser := sanitizeIdentifier(fmt.Sprintf("vcluster_%s", vConfig.Name))
 	
-	klog.Infof("Creating cleanup job for database '%s' and user '%s'", dbName, dbUser)
+	klog.Infof("Dropping database '%s' and user '%s'", dbName, dbUser)
 	
-	// Create a Kubernetes Job to run the cleanup inside the cluster
-	err = createCleanupJob(ctx, vConfig, connectorSecret, dbName, dbUser)
+	// Build admin connection string
+	adminDataSource := buildAdminDataSource(connector)
+	
+	// Drop database and user directly (same as creation, but in reverse)
+	err = dropDatabaseAndUser(ctx, connector.Type, adminDataSource, dbName, dbUser)
 	if err != nil {
-		return fmt.Errorf("failed to create cleanup job: %w", err)
+		return fmt.Errorf("failed to drop database and user: %w", err)
 	}
 	
-	klog.Infof("Cleanup job created successfully for vCluster '%s'", vConfig.Name)
+	klog.Infof("Successfully cleaned up database '%s' and user '%s'", dbName, dbUser)
 	
 	// Also delete the provisioned credentials secret if it exists
 	secretName := fmt.Sprintf("vc-db-%s", vConfig.Name)
@@ -590,8 +598,89 @@ func CleanupExternalDatabase(ctx context.Context, vConfig *config.VirtualCluster
 	return nil
 }
 
-// createCleanupJob creates a Kubernetes Job to cleanup the database
-func createCleanupJob(ctx context.Context, vConfig *config.VirtualClusterConfig, connectorSecret *corev1.Secret, dbName, dbUser string) error {
+// dropDatabaseAndUser drops the database and user (reverse of createDatabaseAndUser)
+func dropDatabaseAndUser(ctx context.Context, dbType, adminDataSource, dbName, dbUser string) error {
+	var db *sql.DB
+	var err error
+
+	// Connect to database server
+	switch dbType {
+	case "mysql":
+		db, err = sql.Open("mysql", adminDataSource)
+	case "postgres", "postgresql":
+		db, err = sql.Open("postgres", adminDataSource)
+	default:
+		return fmt.Errorf("unsupported database type: %s", dbType)
+	}
+	
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer db.Close()
+
+	// Test connection
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping database: %w", err)
+	}
+
+	// Drop database and user based on type
+	switch dbType {
+	case "mysql":
+		return dropMySQLDatabaseAndUser(ctx, db, dbName, dbUser)
+	case "postgres", "postgresql":
+		return dropPostgresDatabaseAndUser(ctx, db, dbName, dbUser)
+	}
+
+	return nil
+}
+
+func dropMySQLDatabaseAndUser(ctx context.Context, db *sql.DB, dbName, dbUser string) error {
+	// Drop database
+	_, err := db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", sanitizeIdentifier(dbName)))
+	if err != nil {
+		return fmt.Errorf("drop database: %w", err)
+	}
+
+	// Drop user
+	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", sanitizeIdentifier(dbUser)))
+	if err != nil {
+		return fmt.Errorf("drop user: %w", err)
+	}
+
+	klog.Infof("Successfully dropped MySQL database '%s' and user '%s'", dbName, dbUser)
+	return nil
+}
+
+func dropPostgresDatabaseAndUser(ctx context.Context, db *sql.DB, dbName, dbUser string) error {
+	// Terminate existing connections to the database
+	_, err := db.ExecContext(ctx, fmt.Sprintf(`
+		SELECT pg_terminate_backend(pid)
+		FROM pg_stat_activity
+		WHERE datname = '%s' AND pid <> pg_backend_pid()
+	`, dbName))
+	if err != nil {
+		klog.Warningf("Failed to terminate connections: %v", err)
+	}
+
+	// Drop database
+	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", sanitizeIdentifier(dbName)))
+	if err != nil {
+		return fmt.Errorf("drop database: %w", err)
+	}
+
+	// Drop user
+	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", sanitizeIdentifier(dbUser)))
+	if err != nil {
+		return fmt.Errorf("drop user: %w", err)
+	}
+
+	klog.Infof("Successfully dropped PostgreSQL database '%s' and user '%s'", dbName, dbUser)
+	return nil
+}
+
+// DEPRECATED: createCleanupJob - No longer used, cleanup now happens in vCluster shutdown handler
+// Keeping this code temporarily for reference, will be removed in next commit
+func createCleanupJob_DEPRECATED(ctx context.Context, vConfig *config.VirtualClusterConfig, connectorSecret *corev1.Secret, dbName, dbUser string) error {
 	dbType := string(connectorSecret.Data["type"])
 	host := string(connectorSecret.Data["host"])
 	port := string(connectorSecret.Data["port"])

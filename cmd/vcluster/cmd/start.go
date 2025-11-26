@@ -126,6 +126,9 @@ func StartInCluster(ctx context.Context, options *StartOptions) error {
 		return fmt.Errorf("initialize: %w", err)
 	}
 
+	// Register cleanup handler for external database
+	setup.RegisterDatabaseCleanupHandler(ctx, vConfig)
+
 	// set features for plugins to recognize
 	plugin.DefaultManager.SetProFeatures(pro.LicenseFeatures())
 
